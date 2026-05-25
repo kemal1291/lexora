@@ -421,3 +421,32 @@ router.post(
 );
 
 module.exports = router;
+
+// =============================================
+// POST /auth/users/fcm-token
+// Simpan/update FCM token device
+// =============================================
+router.post('/users/fcm-token', authenticate, async (req, res, next) => {
+  try {
+    const { fcmToken, platform } = req.body;
+    if (!fcmToken) return sendError(res, 'fcmToken diperlukan', 400);
+
+    const table = req.user.role === 'advocate' ? 'advocates' : 'users';
+    
+    // Cek apakah kolom fcm_token ada, kalau tidak tambahkan
+    await query(`
+      ALTER TABLE ${table} 
+      ADD COLUMN IF NOT EXISTS fcm_token VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS fcm_platform VARCHAR(20)
+    `).catch(() => {});
+
+    await query(
+      `UPDATE ${table} SET fcm_token = $1, fcm_platform = $2 WHERE id = $3`,
+      [fcmToken, platform || 'android', req.user.id]
+    );
+
+    return sendSuccess(res, {}, 'FCM token disimpan');
+  } catch (error) {
+    next(error);
+  }
+});
