@@ -250,3 +250,85 @@ router.get('/unread-count', authenticate, async (req, res, next) => {
 });
 
 module.exports = router;
+
+// =============================================
+// POST /chat/rooms/:roomId/messages
+// Kirim pesan via REST (fallback dari socket)
+// =============================================
+router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+    const { content, messageType = 'text' } = req.body;
+
+    if (!content?.trim()) return sendError(res, 'Pesan tidak boleh kosong', 400);
+
+    // Cek akses room
+    const roomResult = await query(
+      'SELECT * FROM chat_rooms WHERE id = $1 AND is_active = true', [roomId]
+    );
+    const room = roomResult.rows[0];
+    if (!room) return sendError(res, 'Room tidak ditemukan', 404);
+
+    const hasAccess =
+      (req.user.role === 'user' && room.user_id === req.user.id) ||
+      (req.user.role === 'advocate' && room.advocate_id === req.user.id);
+    if (!hasAccess) return sendError(res, 'Akses ditolak', 403);
+
+    // Simpan pesan
+    const result = await query(
+      `INSERT INTO messages (room_id, sender_id, sender_type, content, message_type)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [roomId, req.user.id, req.user.role, content.trim(), messageType]
+    );
+
+    await query('UPDATE chat_rooms SET updated_at = NOW() WHERE id = $1', [roomId]);
+
+    // Ambil info sender
+    const senderTable = req.user.role === 'advocate' ? 'advocates' : 'users';
+    const senderInfo = await query(
+      `SELECT name, photo_url FROM ${senderTable} WHERE id = $1`, [req.user.id]
+    );
+
+    const msg = result.rows[0];
+    const msgData = {
+      id: msg.id,
+      roomId: msg.room_id,
+      senderId: msg.sender_id,
+      senderType: msg.sender_type,
+      senderName: senderInfo.rows[0]?.name,
+      senderPhoto: senderInfo.rows[0]?.photo_url,
+      content: msg.content,
+      messageType: msg.message_type,
+      isRead: false,
+      createdAt: msg.created_at,
+    };
+
+    // Broadcast via socket jika tersedia
+    const { isOnline } = require('../socket/chatHandler');
+    const otherRole = req.user.role === 'user' ? 'advocate' : 'user';
+    const otherId = req.user.role === 'user' ? room.advocate_id : room.user_id;
+
+    // Kirim FCM ke penerima
+    try {
+      const { notifyNewMessage } = require('../services/fcmService');
+      const otherTable = otherRole === 'advocate' ? 'advocates' : 'users';
+      const otherUser = await query(
+        `SELECT fcm_token FROM ${otherTable} WHERE id = $1`, [otherId]
+      );
+      const fcmToken = otherUser.rows[0]?.fcm_token;
+      if (fcmToken) {
+        await notifyNewMessage(
+          fcmToken,
+          senderInfo.rows[0]?.name || 'Pengguna',
+          content,
+          roomId,
+          req.user.id
+        );
+      }
+    } catch (_) {}
+
+    return sendSuccess(res, { message: msgData }, 'Pesan terkirim', 201);
+  } catch (error) {
+    next(error);
+  }
+});
