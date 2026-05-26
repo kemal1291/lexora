@@ -1,10 +1,36 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { body, validationResult } = require('express-validator');
 const { query } = require('../config/database');
 const { authenticate, advocateOnly } = require('../middleware/auth');
 const { sendSuccess, sendError } = require('../middleware/errorHandler');
 
 const router = express.Router();
+
+// Multer config untuk upload dokumen
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../../uploads/complaints');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `complaint_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) cb(null, true);
+    else cb(new Error('Format file tidak didukung'));
+  }
+});
 
 const VALID_CATEGORIES = [
   'pidana', 'perdata', 'keluarga', 'bisnis',
@@ -320,6 +346,31 @@ router.patch('/:id/assign', authenticate, async (req, res, next) => {
     return sendSuccess(res, {
       chatRoomId: roomResult.rows[0].id,
     }, 'Advokat berhasil dipilih');
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+// =============================================
+// POST /complaints/upload
+// Upload dokumen/foto untuk pengaduan
+// =============================================
+router.post('/upload', authenticate, upload.array('files', 5), async (req, res, next) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return sendError(res, 'Tidak ada file yang diupload', 400);
+    }
+
+    const baseUrl = process.env.BASE_URL || 'https://lexora-production.up.railway.app';
+    const urls = req.files.map(file => ({
+      url: `${baseUrl}/uploads/complaints/${file.filename}`,
+      name: file.originalname,
+      size: file.size,
+      type: file.mimetype,
+    }));
+
+    return sendSuccess(res, { files: urls }, 'File berhasil diupload');
   } catch (error) {
     next(error);
   }
