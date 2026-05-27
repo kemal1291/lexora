@@ -26,6 +26,7 @@ const formatAdvocate = async (adv) => {
     location: adv.location,
     experienceYears: adv.experience_years,
     consultationFee: adv.consultation_fee,
+    complaintFee: adv.complaint_fee,       // ← tambahan
     isAvailable: adv.is_available,
     isVerified: adv.is_verified,
     rating: parseFloat(adv.rating) || 0,
@@ -43,10 +44,10 @@ router.get('/', async (req, res, next) => {
   try {
     const {
       search,
-      category,        // spesialisasi filter
+      category,
       location,
-      available,       // 'true' | 'false'
-      sort = 'rating', // 'rating' | 'experience' | 'fee'
+      available,
+      sort = 'rating',
       page = 1,
       limit = 10,
     } = req.query;
@@ -55,26 +56,19 @@ router.get('/', async (req, res, next) => {
     const params = [];
     let whereConditions = ['a.is_active = true', 'a.is_verified = true'];
 
-    // Filter pencarian nama/firma
     if (search) {
       params.push(`%${search}%`);
       whereConditions.push(
         `(a.name ILIKE $${params.length} OR a.firm_name ILIKE $${params.length})`
       );
     }
-
-    // Filter lokasi
     if (location) {
       params.push(`%${location}%`);
       whereConditions.push(`a.location ILIKE $${params.length}`);
     }
-
-    // Filter ketersediaan
     if (available === 'true') {
       whereConditions.push('a.is_available = true');
     }
-
-    // Filter spesialisasi
     if (category) {
       params.push(`%${category}%`);
       whereConditions.push(`
@@ -89,23 +83,20 @@ router.get('/', async (req, res, next) => {
       ? 'WHERE ' + whereConditions.join(' AND ')
       : '';
 
-    // Sort options
     const sortMap = {
-      rating: 'a.rating DESC, a.total_reviews DESC',
+      rating:     'a.rating DESC, a.total_reviews DESC',
       experience: 'a.experience_years DESC',
-      fee_asc: 'a.consultation_fee ASC NULLS FIRST',
-      fee_desc: 'a.consultation_fee DESC NULLS LAST',
+      fee_asc:    'a.consultation_fee ASC NULLS FIRST',
+      fee_desc:   'a.consultation_fee DESC NULLS LAST',
     };
     const orderBy = sortMap[sort] || sortMap.rating;
 
-    // Count total
     const countResult = await query(
       `SELECT COUNT(*) FROM advocates a ${whereClause}`,
       params
     );
     const total = parseInt(countResult.rows[0].count);
 
-    // Get advocates
     params.push(parseInt(limit), offset);
     const result = await query(
       `SELECT a.* FROM advocates a
@@ -132,8 +123,96 @@ router.get('/', async (req, res, next) => {
 });
 
 // =============================================
+// ⚠️  ROUTE /me/* HARUS DI ATAS /:id
+// Jika di bawah, Express akan tangkap "me" sebagai :id
+// =============================================
+
+// =============================================
+// GET /advocates/me/profile
+// Profil advokat yang sedang login + fee
+// =============================================
+router.get('/me/profile', authenticate, advocateOnly, async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT a.*, u.email
+       FROM advocates a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1`,
+      [req.user.id]
+    );
+
+    if (!result.rows[0]) {
+      return sendError(res, 'Profil advokat tidak ditemukan', 404);
+    }
+
+    const advocate = await formatAdvocate(result.rows[0]);
+    return sendSuccess(res, { advocate });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// =============================================
+// PUT /advocates/me/fee
+// Update tarif konsultasi & pengaduan
+// Body: { consultationFee: number|null, complaintFee: number|null }
+// =============================================
+router.put('/me/fee', authenticate, advocateOnly, async (req, res, next) => {
+  try {
+    const { consultationFee, complaintFee } = req.body;
+
+    if (consultationFee !== null && consultationFee !== undefined) {
+      if (!Number.isInteger(consultationFee) || consultationFee < 0) {
+        return sendError(res, 'consultationFee harus bilangan bulat positif atau null', 400);
+      }
+    }
+    if (complaintFee !== null && complaintFee !== undefined) {
+      if (!Number.isInteger(complaintFee) || complaintFee < 0) {
+        return sendError(res, 'complaintFee harus bilangan bulat positif atau null', 400);
+      }
+    }
+
+    await query(
+      `UPDATE advocates
+       SET consultation_fee = $1,
+           complaint_fee    = $2,
+           updated_at       = NOW()
+       WHERE id = $3`,
+      [consultationFee ?? null, complaintFee ?? null, req.user.id]
+    );
+
+    return sendSuccess(res, {
+      consultationFee: consultationFee ?? null,
+      complaintFee:    complaintFee    ?? null,
+    }, 'Tarif berhasil diperbarui');
+  } catch (error) {
+    next(error);
+  }
+});
+
+// =============================================
+// PUT /advocates/availability
+// Update status online/offline
+// =============================================
+router.put('/availability', authenticate, advocateOnly, async (req, res, next) => {
+  try {
+    const { isAvailable } = req.body;
+    if (typeof isAvailable !== 'boolean') {
+      return sendError(res, 'isAvailable harus boolean', 400);
+    }
+    await query(
+      'UPDATE advocates SET is_available = $1 WHERE id = $2',
+      [isAvailable, req.user.id]
+    );
+    return sendSuccess(res, { isAvailable }, 'Status ketersediaan diperbarui');
+  } catch (error) {
+    next(error);
+  }
+});
+
+// =============================================
 // GET /advocates/:id
-// Detail satu advokat
+// Detail satu advokat — HARUS DI BAWAH /me/*
 // =============================================
 router.get('/:id', async (req, res, next) => {
   try {
@@ -148,7 +227,6 @@ router.get('/:id', async (req, res, next) => {
 
     const advocate = await formatAdvocate(result.rows[0]);
 
-    // Ambil reviews
     const reviews = await query(
       `SELECT r.*, u.name as user_name, u.photo_url as user_photo
        FROM reviews r
@@ -162,10 +240,10 @@ router.get('/:id', async (req, res, next) => {
     return sendSuccess(res, {
       advocate,
       reviews: reviews.rows.map(r => ({
-        id: r.id,
-        rating: r.rating,
-        comment: r.comment,
-        userName: r.user_name,
+        id:        r.id,
+        rating:    r.rating,
+        comment:   r.comment,
+        userName:  r.user_name,
         userPhoto: r.user_photo,
         createdAt: r.created_at,
       })),
@@ -176,30 +254,8 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // =============================================
-// PUT /advocates/availability
-// Update ketersediaan advokat (untuk advokat)
-// =============================================
-router.put('/availability', authenticate, advocateOnly, async (req, res, next) => {
-  try {
-    const { isAvailable } = req.body;
-    if (typeof isAvailable !== 'boolean') {
-      return sendError(res, 'isAvailable harus boolean', 400);
-    }
-
-    await query(
-      'UPDATE advocates SET is_available = $1 WHERE id = $2',
-      [isAvailable, req.user.id]
-    );
-
-    return sendSuccess(res, { isAvailable }, 'Status ketersediaan diperbarui');
-  } catch (error) {
-    next(error);
-  }
-});
-
-// =============================================
 // POST /advocates/:id/review
-// Beri ulasan untuk advokat
+// Beri ulasan — HARUS DI BAWAH /me/*
 // =============================================
 router.post('/:id/review', authenticate, async (req, res, next) => {
   try {
@@ -212,7 +268,6 @@ router.post('/:id/review', authenticate, async (req, res, next) => {
       return sendError(res, 'Rating harus antara 1 dan 5', 400);
     }
 
-    // Cek advokat exists
     const advResult = await query(
       'SELECT id FROM advocates WHERE id = $1',
       [req.params.id]
@@ -221,7 +276,6 @@ router.post('/:id/review', authenticate, async (req, res, next) => {
       return sendError(res, 'Advokat tidak ditemukan', 404);
     }
 
-    // Simpan atau update review
     await query(
       `INSERT INTO reviews (user_id, advocate_id, rating, comment)
        VALUES ($1, $2, $3, $4)
@@ -230,7 +284,6 @@ router.post('/:id/review', authenticate, async (req, res, next) => {
       [req.user.id, req.params.id, rating, comment]
     );
 
-    // Update rata-rata rating di tabel advocates
     await query(
       `UPDATE advocates SET
          rating = (SELECT AVG(rating) FROM reviews WHERE advocate_id = $1),
