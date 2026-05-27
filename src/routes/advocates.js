@@ -129,15 +129,11 @@ router.get('/', async (req, res, next) => {
 
 // =============================================
 // GET /advocates/me/profile
-// Profil advokat yang sedang login + fee
 // =============================================
 router.get('/me/profile', authenticate, advocateOnly, async (req, res, next) => {
   try {
     const result = await query(
-      `SELECT a.*, u.email
-       FROM advocates a
-       JOIN users u ON u.id = a.user_id
-       WHERE a.id = $1`,
+      'SELECT * FROM advocates WHERE id = $1',
       [req.user.id]
     );
 
@@ -154,7 +150,6 @@ router.get('/me/profile', authenticate, advocateOnly, async (req, res, next) => 
 
 // =============================================
 // PUT /advocates/me/fee
-// Update tarif konsultasi & pengaduan
 // Body: { consultationFee: number|null, complaintFee: number|null }
 // =============================================
 router.put('/me/fee', authenticate, advocateOnly, async (req, res, next) => {
@@ -180,6 +175,8 @@ router.put('/me/fee', authenticate, advocateOnly, async (req, res, next) => {
        WHERE id = $3`,
       [consultationFee ?? null, complaintFee ?? null, req.user.id]
     );
+
+    console.log(`[Fee] user=${req.user.id} chat=${consultationFee} complaint=${complaintFee}`);
 
     return sendSuccess(res, {
       consultationFee: consultationFee ?? null,
