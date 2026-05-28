@@ -4,14 +4,27 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
+const admin = require('firebase-admin');
 
 const authRoutes = require('./routes/auth');
 const advocatesRoutes = require('./routes/advocates');
 const complaintsRoutes = require('./routes/complaints');
 const chatRoutes = require('./routes/chat');
+const subscriptionsRoutes = require('./routes/subscriptions'); // ← BARU
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const app = express();
+
+// =============================================
+// FIREBASE ADMIN INIT (untuk kirim FCM)
+// =============================================
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+    // Jika pakai service account key, ganti dengan:
+    // credential: admin.credential.cert(require('../serviceAccountKey.json')),
+  });
+}
 
 // =============================================
 // SECURITY MIDDLEWARE
@@ -54,7 +67,7 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // =============================================
-// STATIC FILES (uploaded documents)
+// STATIC FILES
 // =============================================
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
@@ -74,13 +87,14 @@ app.get('/health', (req, res) => {
 // =============================================
 // API ROUTES
 // =============================================
-app.use('/api/auth', authRoutes);
-app.use('/api/advocates', advocatesRoutes);
-app.use('/api/complaints', complaintsRoutes);
-app.use('/api/chat', chatRoutes);
+app.use('/api/auth',          authRoutes);
+app.use('/api/advocates',     advocatesRoutes);
+app.use('/api/complaints',    complaintsRoutes);
+app.use('/api/chat',          chatRoutes);
+app.use('/api/subscriptions', subscriptionsRoutes); // ← BARU
 
 // =============================================
-// API DOCS (endpoint list)
+// API DOCS
 // =============================================
 app.get('/api', (req, res) => {
   res.json({
@@ -100,8 +114,10 @@ app.get('/api', (req, res) => {
       },
       advocates: {
         'GET /api/advocates': 'Daftar advokat (search, filter, pagination)',
+        'GET /api/advocates/me/profile': 'Profil advokat login [ADVOCATE]',
+        'PUT /api/advocates/me/fee': 'Update tarif [ADVOCATE]',
         'GET /api/advocates/:id': 'Detail advokat + ulasan',
-        'PUT /api/advocates/availability': 'Update status advokat [ADVOCATE]',
+        'PUT /api/advocates/availability': 'Update status [ADVOCATE]',
         'POST /api/advocates/:id/review': 'Beri ulasan [USER]',
       },
       complaints: {
@@ -117,24 +133,9 @@ app.get('/api', (req, res) => {
         'GET /api/chat/rooms/:id/messages': 'Riwayat pesan [AUTH]',
         'GET /api/chat/unread-count': 'Jumlah pesan belum dibaca [AUTH]',
       },
-      socket: {
-        events: {
-          'room:join': '{ roomId } → bergabung ke room',
-          'room:leave': '{ roomId } → keluar dari room',
-          'message:send': '{ roomId, content, messageType } → kirim pesan',
-          'typing:start': '{ roomId } → mulai mengetik',
-          'typing:stop': '{ roomId } → berhenti mengetik',
-          'messages:read': '{ roomId } → tandai pesan dibaca',
-        },
-        listen: {
-          'message:new': 'Pesan baru masuk',
-          'typing:start': 'Lawan bicara sedang mengetik',
-          'typing:stop': 'Lawan bicara berhenti mengetik',
-          'messages:read': 'Pesan sudah dibaca',
-          'notification:message': 'Notifikasi pesan (saat tidak di room)',
-          'user:online': 'User/advokat online',
-          'user:offline': 'User/advokat offline',
-        },
+      subscriptions: {
+        'POST /api/subscriptions/chat': 'Catat langganan chat + notif advokat [AUTH]',
+        'POST /api/subscriptions/complaint': 'Catat pengaduan + notif advokat [AUTH]',
       },
     },
   });
