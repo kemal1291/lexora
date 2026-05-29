@@ -1,3 +1,4 @@
+// src/services/fcmService.js
 const admin = require('firebase-admin');
 
 const sendToDevice = async (fcmToken, notification, data = {}) => {
@@ -31,11 +32,20 @@ const sendToDevice = async (fcmToken, notification, data = {}) => {
   }
 };
 
-const notifyNewMessage = (fcmToken, senderName, content, roomId, advocateId) =>
+// consultationFee ditambahkan di parameter
+const notifyNewMessage = (fcmToken, senderName, content, roomId, senderId, consultationFee = '0') =>
   sendToDevice(fcmToken,
-    { title: `💬 ${senderName}`,
-      body: content.length > 80 ? content.substring(0, 80) + '...' : content },
-    { type: 'chat', roomId: roomId || '', advocateName: senderName, advocateId: advocateId || '' }
+    {
+      title: `💬 ${senderName}`,
+      body: content.length > 80 ? content.substring(0, 80) + '...' : content,
+    },
+    {
+      type:            'chat',
+      roomId:          roomId          || '',
+      advocateName:    senderName      || '',
+      advocateId:      senderId        || '',
+      consultationFee: String(consultationFee), // ← fee dikirim ke Flutter
+    }
   );
 
 const notifyNewComplaint = (fcmToken, userName, title) =>
@@ -45,8 +55,10 @@ const notifyNewComplaint = (fcmToken, userName, title) =>
   );
 
 const notifyComplaintUpdate = (fcmToken, status, title) => {
-  const labels = { review: 'sedang ditinjau', in_progress: 'sedang ditangani',
-                   resolved: 'telah selesai', rejected: 'tidak dapat diproses' };
+  const labels = {
+    review: 'sedang ditinjau', in_progress: 'sedang ditangani',
+    resolved: 'telah selesai', rejected: 'tidak dapat diproses',
+  };
   return sendToDevice(fcmToken,
     { title: '⚖️ Update Pengaduan', body: `"${title}" ${labels[status] || status}` },
     { type: 'complaint' }

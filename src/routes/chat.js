@@ -239,11 +239,19 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
       const otherUser  = await query(
         `SELECT fcm_token FROM ${otherTable} WHERE id = $1`, [otherId]);
       const fcmToken   = otherUser.rows[0]?.fcm_token;
+
+      // Ambil consultation fee advokat untuk dikirim ke client
+      const advInfo = await query(
+        'SELECT consultation_fee FROM advocates WHERE id = $1',
+        [room.advocate_id]);
+      const consultationFee = advInfo.rows[0]?.consultation_fee || 0;
+
       if (fcmToken) {
         await notifyNewMessage(
           fcmToken,
           senderInfo.rows[0]?.name || 'Pengguna',
-          content, roomId, req.user.id
+          content, roomId, req.user.id,
+          String(consultationFee) // ← kirim fee ke client
         );
       }
     } catch (_) {}
