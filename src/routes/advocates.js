@@ -150,11 +150,11 @@ router.get('/me/profile', authenticate, advocateOnly, async (req, res, next) => 
 
 // =============================================
 // PUT /advocates/me/fee
-// Body: { consultationFee: number|null, complaintFee: number|null }
+// Body: { consultationFee: number|null, complaintFee: number|null, fcmToken?: string }
 // =============================================
 router.put('/me/fee', authenticate, advocateOnly, async (req, res, next) => {
   try {
-    const { consultationFee, complaintFee } = req.body;
+    const { consultationFee, complaintFee, fcmToken } = req.body;
 
     if (consultationFee !== null && consultationFee !== undefined) {
       if (!Number.isInteger(consultationFee) || consultationFee < 0) {
@@ -171,17 +171,19 @@ router.put('/me/fee', authenticate, advocateOnly, async (req, res, next) => {
       `UPDATE advocates
        SET consultation_fee = $1,
            complaint_fee    = $2,
+           fcm_token        = COALESCE($3, fcm_token),
            updated_at       = NOW()
-       WHERE id = $3`,
-      [consultationFee ?? null, complaintFee ?? null, req.user.id]
+       WHERE id = $4`,
+      [consultationFee ?? null, complaintFee ?? null, fcmToken ?? null, req.user.id]
     );
 
+    if (fcmToken) console.log(`[FCM] Token tersimpan untuk advokat ${req.user.id}`);
     console.log(`[Fee] user=${req.user.id} chat=${consultationFee} complaint=${complaintFee}`);
 
     return sendSuccess(res, {
       consultationFee: consultationFee ?? null,
       complaintFee:    complaintFee    ?? null,
-    }, 'Tarif berhasil diperbarui');
+    }, 'Berhasil diperbarui');
   } catch (error) {
     next(error);
   }
