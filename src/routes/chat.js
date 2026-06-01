@@ -232,7 +232,7 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
 
     // Kirim FCM ke penerima
     try {
-      const { notifyNewMessage } = require('../services/fcmService');
+      const { notifyNewMessage, sendToDevice } = require('../services/fcmService');
       const otherRole  = req.user.role === 'user' ? 'advocate' : 'user';
       const otherId    = req.user.role === 'user' ? room.advocate_id : room.user_id;
       const otherTable = otherRole === 'advocate' ? 'advocates' : 'users';
@@ -240,19 +240,62 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
         `SELECT fcm_token FROM ${otherTable} WHERE id = $1`, [otherId]);
       const fcmToken   = otherUser.rows[0]?.fcm_token;
 
-      // Ambil consultation fee advokat untuk dikirim ke client
+      // Ambil consultation fee advokat
       const advInfo = await query(
         'SELECT consultation_fee FROM advocates WHERE id = $1',
         [room.advocate_id]);
       const consultationFee = advInfo.rows[0]?.consultation_fee || 0;
 
       if (fcmToken) {
+        // Notif pesan baru ke penerima
         await notifyNewMessage(
           fcmToken,
           senderInfo.rows[0]?.name || 'Pengguna',
           content, roomId, req.user.id,
-          String(consultationFee) // ← kirim fee ke client
+          String(consultationFee)
         );
+      }
+
+      // Cek apakah user sudah mencapai batas pesan gratis
+      // Hanya kirim notif ke advokat jika pengirim adalah user
+      if (req.user.role === 'user') {
+        const msgCountResult = await query(
+          `SELECT COUNT(*) as count FROM messages
+           WHERE room_id = $1 AND sender_id = $2 AND sender_type = 'user'`,
+          [roomId, req.user.id]
+        );
+        const msgCount = parseInt(msgCountResult.rows[0].count) || 0;
+
+        // Cek apakah sudah berlangganan premium
+        const isPremium = await query(
+          `SELECT id FROM subscriptions
+           WHERE user_id = $1 AND advocate_id = $2 AND type = 'chat'`,
+          [req.user.id, room.advocate_id]
+        );
+
+        // Notif ke advokat saat user tepat mencapai batas gratis
+        if (msgCount === 5 && isPremium.rows.length === 0) {
+          const advocateUser = await query(
+            'SELECT fcm_token FROM advocates WHERE id = $1',
+            [room.advocate_id]);
+          const advFcmToken = advocateUser.rows[0]?.fcm_token;
+
+          if (advFcmToken) {
+            const userName = senderInfo.rows[0]?.name || 'Klien';
+            await sendToDevice(advFcmToken,
+              {
+                title: '⏳ Klien Kehabisan Pesan Gratis',
+                body:  `${userName} telah mencapai batas 5 pesan gratis. Tunggu hingga mereka berlangganan.`,
+              },
+              {
+                type:   'chat_limit_reached',
+                roomId: roomId,
+                userId: req.user.id,
+              }
+            );
+            console.log(`[FCM] Notif batas pesan gratis → advokat ${room.advocate_id}`);
+          }
+        }
       }
     } catch (_) {}
 

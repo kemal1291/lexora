@@ -5,22 +5,19 @@ const morgan = require('morgan');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 
-// ── Firebase Admin — init pakai credentials dari env vars ─────────────────────
 const { initFirebase } = require('./config/firebase');
-initFirebase(); // ← wajib dipanggil sebelum routes
+initFirebase();
 
 const authRoutes          = require('./routes/auth');
 const advocatesRoutes     = require('./routes/advocates');
 const complaintsRoutes    = require('./routes/complaints');
 const chatRoutes          = require('./routes/chat');
 const subscriptionsRoutes = require('./routes/subscriptions');
+const articlesRoutes      = require('./routes/articles');  // ← TAMBAH INI
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const app = express();
 
-// =============================================
-// SECURITY MIDDLEWARE
-// =============================================
 app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
@@ -43,27 +40,15 @@ const authLimiter = rateLimit({
 app.use('/api/auth/login',    authLimiter);
 app.use('/api/auth/register', authLimiter);
 
-// =============================================
-// BODY PARSER
-// =============================================
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// =============================================
-// LOGGING
-// =============================================
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 }
 
-// =============================================
-// STATIC FILES
-// =============================================
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
-// =============================================
-// HEALTH CHECK
-// =============================================
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -74,18 +59,14 @@ app.get('/health', (req, res) => {
   });
 });
 
-// =============================================
-// API ROUTES
-// =============================================
+// ── ROUTES ────────────────────────────────────────────────────────────────────
 app.use('/api/auth',          authRoutes);
 app.use('/api/advocates',     advocatesRoutes);
 app.use('/api/complaints',    complaintsRoutes);
 app.use('/api/chat',          chatRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
+app.use('/api/articles',      articlesRoutes);  // ← TAMBAH INI
 
-// =============================================
-// API DOCS
-// =============================================
 app.get('/api', (req, res) => {
   res.json({
     success: true,
@@ -103,37 +84,34 @@ app.get('/api', (req, res) => {
         'PUT /api/auth/change-password':'Ubah password [AUTH]',
       },
       advocates: {
-        'GET /api/advocates':           'Daftar advokat (search, filter, pagination)',
+        'GET /api/advocates':           'Daftar advokat',
         'GET /api/advocates/me/profile':'Profil advokat login [ADVOCATE]',
         'PUT /api/advocates/me/fee':    'Update tarif [ADVOCATE]',
-        'GET /api/advocates/:id':       'Detail advokat + ulasan',
-        'PUT /api/advocates/availability':'Update status [ADVOCATE]',
-        'POST /api/advocates/:id/review':'Beri ulasan [USER]',
+        'GET /api/advocates/:id':       'Detail advokat',
+      },
+      articles: {
+        'GET /api/articles':            'Semua artikel (publik)',
+        'GET /api/articles/my/list':    'Artikel milik advokat [ADVOCATE]',
+        'GET /api/articles/:id':        'Detail artikel',
+        'POST /api/articles':           'Buat artikel [ADVOCATE]',
+        'PUT /api/articles/:id':        'Update artikel [ADVOCATE]',
+        'DELETE /api/articles/:id':     'Hapus artikel [ADVOCATE]',
       },
       complaints: {
         'GET /api/complaints':          'Daftar pengaduan [AUTH]',
         'POST /api/complaints':         'Buat pengaduan baru [USER]',
         'GET /api/complaints/:id':      'Detail pengaduan [AUTH]',
         'PATCH /api/complaints/:id/status':'Update status [ADVOCATE]',
-        'PATCH /api/complaints/:id/assign':'Assign advokat [USER]',
       },
       chat: {
         'GET /api/chat/rooms':          'Daftar chat room [AUTH]',
         'POST /api/chat/rooms':         'Buat chat room [USER]',
         'GET /api/chat/rooms/:id/messages':'Riwayat pesan [AUTH]',
-        'GET /api/chat/unread-count':   'Jumlah pesan belum dibaca [AUTH]',
-      },
-      subscriptions: {
-        'POST /api/subscriptions/chat':     'Catat langganan chat + notif advokat [AUTH]',
-        'POST /api/subscriptions/complaint':'Catat pengaduan + notif advokat [AUTH]',
       },
     },
   });
 });
 
-// =============================================
-// 404 & ERROR HANDLER
-// =============================================
 app.use(notFound);
 app.use(errorHandler);
 
