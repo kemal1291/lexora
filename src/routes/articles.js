@@ -25,8 +25,8 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|gif|webp|pdf|doc|docx/;
-    const ok = allowed.test(path.extname(file.originalname).toLowerCase())
+    const ok = /jpeg|jpg|png|gif|webp|pdf|doc|docx/.test(
+      path.extname(file.originalname).toLowerCase())
       || file.mimetype === 'application/pdf'
       || file.mimetype.startsWith('image/')
       || file.mimetype.includes('word');
@@ -34,19 +34,18 @@ const upload = multer({
   },
 });
 
-// ── GET semua artikel (publik) ────────────────────────────────────────────────
+// ── GET semua artikel publik (untuk user dashboard) ───────────────────────────
 router.get('/', async (req, res) => {
   try {
     const { category, limit = 20, offset = 0 } = req.query;
     const params = category ? [limit, offset, category] : [limit, offset];
     const result = await query(`
       SELECT a.*,
-             u.name      AS advocate_name,
-             u.photo_url AS advocate_photo,
-             adv.title   AS advocate_title
+             adv.name      AS advocate_name,
+             adv.photo_url AS advocate_photo,
+             adv.title     AS advocate_title
       FROM articles a
-      JOIN users u ON a.advocate_id = u.id
-      LEFT JOIN advocates adv ON adv.id = a.advocate_id
+      JOIN advocates adv ON adv.id = a.advocate_id
       WHERE a.is_published = true
       ${category ? 'AND a.category = $3' : ''}
       ORDER BY a.created_at DESC
@@ -76,11 +75,12 @@ router.get('/:id', async (req, res) => {
   try {
     await query('UPDATE articles SET views = views + 1 WHERE id = $1', [req.params.id]);
     const result = await query(`
-      SELECT a.*, u.name AS advocate_name, u.photo_url AS advocate_photo,
-             adv.title AS advocate_title
+      SELECT a.*,
+             adv.name      AS advocate_name,
+             adv.photo_url AS advocate_photo,
+             adv.title     AS advocate_title
       FROM articles a
-      JOIN users u ON a.advocate_id = u.id
-      LEFT JOIN advocates adv ON adv.id = a.advocate_id
+      JOIN advocates adv ON adv.id = a.advocate_id
       WHERE a.id = $1
     `, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ message: 'Artikel tidak ditemukan' });
@@ -112,26 +112,18 @@ router.post('/upload', authenticate, upload.single('file'), async (req, res) => 
   }
 });
 
-// ── POST buat artikel baru ────────────────────────────────────────────────────
+// ── POST buat artikel ─────────────────────────────────────────────────────────
 router.post('/', authenticate, async (req, res) => {
   try {
     const { title, content, category = 'Umum', coverUrl, attachments, isPublished = true } = req.body;
     if (!title || !content) {
       return res.status(400).json({ message: 'Title dan konten wajib diisi' });
     }
-    // req.user.id = id dari users table (bukan advocates)
     const result = await query(`
       INSERT INTO articles (advocate_id, title, content, category, cover_url, attachments, is_published)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
-    `, [
-      req.user.id,
-      title,
-      content,
-      category,
-      coverUrl || null,
-      attachments ? JSON.stringify(attachments) : '[]',
-      isPublished
-    ]);
+    `, [req.user.id, title, content, category, coverUrl || null,
+        attachments ? JSON.stringify(attachments) : '[]', isPublished]);
     res.status(201).json({ success: true, data: { article: result.rows[0] } });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -148,11 +140,9 @@ router.put('/:id', authenticate, async (req, res) => {
           attachments=$5, is_published=$6, updated_at=NOW()
       WHERE id=$7 AND advocate_id=$8
       RETURNING *
-    `, [
-      title, content, category, coverUrl || null,
-      attachments ? JSON.stringify(attachments) : '[]',
-      isPublished, req.params.id, req.user.id
-    ]);
+    `, [title, content, category, coverUrl || null,
+        attachments ? JSON.stringify(attachments) : '[]',
+        isPublished, req.params.id, req.user.id]);
     if (!result.rows[0]) return res.status(404).json({ message: 'Artikel tidak ditemukan' });
     res.json({ success: true, data: { article: result.rows[0] } });
   } catch (err) {
