@@ -33,22 +33,22 @@ const io = new Server(server, {
   pingInterval: 25000,
 });
 
+// ── [TAMBAHAN] Expose io ke Express app ──────────────────────
+// Wajib agar req.app.get('io') di chat.js bisa broadcast
+// socket event 'message:deleted' saat REST DELETE dipanggil
+app.set('io', io);
+
 // =============================================
 // INISIALISASI
 // =============================================
 async function startServer() {
   try {
-    // Test koneksi database
     console.log('\n🔌 Menghubungkan ke database...');
     await pool.query('SELECT NOW()');
 
-    // Init Firebase (opsional)
     initFirebase();
-
-    // Setup Socket.io
     setupSocket(io);
 
-    // Start server
     server.listen(PORT, () => {
       console.log('\n╔═══════════════════════════════════════╗');
       console.log('║         LEXORA BACKEND SERVER         ║');
@@ -62,11 +62,6 @@ async function startServer() {
 
   } catch (error) {
     console.error('\n❌ Gagal menjalankan server:', error.message);
-    console.error('\nPastikan:');
-    console.error('  1. PostgreSQL sedang berjalan');
-    console.error('  2. File .env sudah dikonfigurasi');
-    console.error('  3. Database sudah dibuat (createdb lexora_db)');
-    console.error('  4. Migration sudah dijalankan (npm run db:migrate)\n');
     process.exit(1);
   }
 }
