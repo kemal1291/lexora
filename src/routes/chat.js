@@ -230,7 +230,6 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
       isRead: false, createdAt: msg.created_at,
     };
 
-    // Kirim FCM ke penerima
     try {
       const { notifyNewMessage, sendToDevice } = require('../services/fcmService');
       const otherRole  = req.user.role === 'user' ? 'advocate' : 'user';
@@ -240,14 +239,12 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
         `SELECT fcm_token FROM ${otherTable} WHERE id = $1`, [otherId]);
       const fcmToken   = otherUser.rows[0]?.fcm_token;
 
-      // Ambil consultation fee advokat
       const advInfo = await query(
         'SELECT consultation_fee FROM advocates WHERE id = $1',
         [room.advocate_id]);
       const consultationFee = advInfo.rows[0]?.consultation_fee || 0;
 
       if (fcmToken) {
-        // Notif pesan baru ke penerima
         await notifyNewMessage(
           fcmToken,
           senderInfo.rows[0]?.name || 'Pengguna',
@@ -256,8 +253,6 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
         );
       }
 
-      // Cek apakah user sudah mencapai batas pesan gratis
-      // Hanya kirim notif ke advokat jika pengirim adalah user
       if (req.user.role === 'user') {
         const msgCountResult = await query(
           `SELECT COUNT(*) as count FROM messages
@@ -266,14 +261,12 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
         );
         const msgCount = parseInt(msgCountResult.rows[0].count) || 0;
 
-        // Cek apakah sudah berlangganan premium
         const isPremium = await query(
           `SELECT id FROM subscriptions
            WHERE user_id = $1 AND advocate_id = $2 AND type = 'chat'`,
           [req.user.id, room.advocate_id]
         );
 
-        // Notif ke advokat saat user tepat mencapai batas gratis
         if (msgCount === 5 && isPremium.rows.length === 0) {
           const advocateUser = await query(
             'SELECT fcm_token FROM advocates WHERE id = $1',
@@ -293,13 +286,54 @@ router.post('/rooms/:roomId/messages', authenticate, async (req, res, next) => {
                 userId: req.user.id,
               }
             );
-            console.log(`[FCM] Notif batas pesan gratis → advokat ${room.advocate_id}`);
           }
         }
       }
     } catch (_) {}
 
     return sendSuccess(res, { message: msgData }, 'Pesan terkirim', 201);
+  } catch (error) { next(error); }
+});
+
+// =============================================
+// DELETE /chat/rooms/:roomId/messages/:messageId  ← BARU
+// =============================================
+router.delete('/rooms/:roomId/messages/:messageId', authenticate, async (req, res, next) => {
+  try {
+    const { roomId, messageId } = req.params;
+
+    // 1. Cek room & akses
+    const roomResult = await query(
+      'SELECT * FROM chat_rooms WHERE id = $1 AND is_active IS NOT FALSE', [roomId]);
+    const room = roomResult.rows[0];
+    if (!room) return sendError(res, 'Room tidak ditemukan', 404);
+
+    const hasAccess =
+      (req.user.role === 'user'     && room.user_id     === req.user.id) ||
+      (req.user.role === 'advocate' && room.advocate_id === req.user.id);
+    if (!hasAccess) return sendError(res, 'Akses ditolak', 403);
+
+    // 2. Cek pesan ada & milik pengirim
+    const msgResult = await query(
+      'SELECT * FROM messages WHERE id = $1 AND room_id = $2', [messageId, roomId]);
+    const msg = msgResult.rows[0];
+    if (!msg) return sendError(res, 'Pesan tidak ditemukan', 404);
+
+    if (msg.sender_id !== req.user.id)
+      return sendError(res, 'Tidak berhak menghapus pesan ini', 403);
+
+    // 3. Hapus dari database
+    await query('DELETE FROM messages WHERE id = $1', [messageId]);
+
+    // 4. Broadcast ke socket agar semua client di room hapus bubble-nya
+    //    io di-attach ke app lewat req.app.get('io')
+    const io = req.app.get('io');
+    if (io) {
+      io.to(roomId).emit('message:deleted', { messageId, roomId });
+    }
+
+    console.log(`🗑️  Pesan ${messageId} dihapus oleh ${req.user.role} ${req.user.id}`);
+    return sendSuccess(res, { messageId }, 'Pesan berhasil dihapus');
   } catch (error) { next(error); }
 });
 

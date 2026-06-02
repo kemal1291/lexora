@@ -50,7 +50,9 @@ const setupSocket = (io) => {
       isOnline: true,
     });
 
+    // =============================================
     // JOIN ROOM
+    // =============================================
     socket.on('room:join', async ({ roomId }, callback) => {
       try {
         const roomResult = await query(
@@ -87,13 +89,17 @@ const setupSocket = (io) => {
       }
     });
 
+    // =============================================
     // LEAVE ROOM
+    // =============================================
     socket.on('room:leave', ({ roomId }) => {
       socket.leave(roomId);
       socketRooms.get(socket.id)?.delete(roomId);
     });
 
-    // SEND MESSAGE + FCM NOTIFICATION
+    // =============================================
+    // SEND MESSAGE
+    // =============================================
     socket.on('message:send', async ({ roomId, content, messageType = 'text' }, callback) => {
       try {
         if (!content?.trim() && messageType === 'text') {
@@ -110,7 +116,6 @@ const setupSocket = (io) => {
           (socket.user.role === 'advocate' && room.advocate_id === socket.user.id);
         if (!hasAccess) return callback?.({ success: false, message: 'Akses ditolak' });
 
-        // Simpan pesan
         const result = await query(
           `INSERT INTO messages (room_id, sender_id, sender_type, content, message_type)
            VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -118,54 +123,42 @@ const setupSocket = (io) => {
         );
 
         const message = formatMessage(result.rows[0]);
-        message.senderName = socket.user.name;
+        message.senderName  = socket.user.name;
         message.senderPhoto = socket.user.photo_url;
 
         await query('UPDATE chat_rooms SET updated_at = NOW() WHERE id = $1', [roomId]);
 
-        // Kirim ke room
         io.to(roomId).emit('message:new', message);
 
-        // Notifikasi ke lawan bicara
-        const otherKey = socket.user.role === 'user'
+        const otherKey      = socket.user.role === 'user'
           ? `advocate_${room.advocate_id}`
           : `user_${room.user_id}`;
         const otherSocketId = onlineUsers.get(otherKey);
-        const otherSocket = otherSocketId
+        const otherSocket   = otherSocketId
           ? io.sockets.sockets.get(otherSocketId)
           : null;
 
-        // Kirim socket notif kalau tidak di room
         if (otherSocket && !otherSocket.rooms.has(roomId)) {
           otherSocket.emit('notification:message', {
             roomId,
-            senderName: socket.user.name,
+            senderName:  socket.user.name,
             senderPhoto: socket.user.photo_url,
-            content: content.substring(0, 80),
+            content:     content.substring(0, 80),
           });
         }
 
-        // ===== FCM PUSH NOTIFICATION =====
-        // Kirim FCM kalau lawan bicara offline atau tidak di room
         const isOtherInRoom = otherSocket?.rooms.has(roomId);
         if (!isOtherInRoom) {
           try {
-            // Ambil FCM token lawan bicara
             const otherTable = socket.user.role === 'user' ? 'advocates' : 'users';
-            const otherId = socket.user.role === 'user'
+            const otherId    = socket.user.role === 'user'
               ? room.advocate_id : room.user_id;
-            const otherUser = await query(
-              `SELECT fcm_token FROM ${otherTable} WHERE id = $1`,
-              [otherId]
-            );
-
-            const fcmToken = otherUser.rows[0]?.fcm_token;
+            const otherUser  = await query(
+              `SELECT fcm_token FROM ${otherTable} WHERE id = $1`, [otherId]);
+            const fcmToken   = otherUser.rows[0]?.fcm_token;
             if (fcmToken) {
               await notifyNewMessage(
-                fcmToken,
-                socket.user.name,
-                content,
-                roomId,
+                fcmToken, socket.user.name, content, roomId,
                 socket.user.role === 'user' ? socket.user.id : room.advocate_id
               );
             }
@@ -183,7 +176,58 @@ const setupSocket = (io) => {
       }
     });
 
+    // =============================================
+    // DELETE MESSAGE  ← BARU
+    // =============================================
+    socket.on('message:delete', async ({ roomId, messageId }, callback) => {
+      try {
+        // 1. Validasi input
+        if (!roomId || !messageId)
+          return callback?.({ success: false, message: 'roomId dan messageId diperlukan' });
+
+        // 2. Cek akses ke room
+        const roomResult = await query(
+          'SELECT * FROM chat_rooms WHERE id = $1 AND is_active IS NOT FALSE', [roomId]);
+        const room = roomResult.rows[0];
+        if (!room)
+          return callback?.({ success: false, message: 'Room tidak ditemukan' });
+
+        const hasAccess =
+          (socket.user.role === 'user'     && room.user_id     === socket.user.id) ||
+          (socket.user.role === 'advocate' && room.advocate_id === socket.user.id);
+        if (!hasAccess)
+          return callback?.({ success: false, message: 'Akses ditolak' });
+
+        // 3. Cek pesan ada & milik pengirim
+        const msgResult = await query(
+          'SELECT * FROM messages WHERE id = $1 AND room_id = $2',
+          [messageId, roomId]
+        );
+        const msg = msgResult.rows[0];
+        if (!msg)
+          return callback?.({ success: false, message: 'Pesan tidak ditemukan' });
+
+        if (msg.sender_id !== socket.user.id)
+          return callback?.({ success: false, message: 'Tidak berhak menghapus pesan ini' });
+
+        // 4. Hapus dari database
+        await query('DELETE FROM messages WHERE id = $1', [messageId]);
+
+        // 5. Broadcast ke semua client di room
+        io.to(roomId).emit('message:deleted', { messageId, roomId });
+
+        callback?.({ success: true, messageId });
+        console.log(`🗑️  [${roomId}] Pesan ${messageId} dihapus oleh ${socket.user.name}`);
+
+      } catch (error) {
+        console.error('message:delete error:', error.message);
+        callback?.({ success: false, message: error.message });
+      }
+    });
+
+    // =============================================
     // TYPING
+    // =============================================
     socket.on('typing:start', ({ roomId }) => {
       socket.to(roomId).emit('typing:start', {
         roomId, userId: socket.user.id,
@@ -197,7 +241,9 @@ const setupSocket = (io) => {
       });
     });
 
+    // =============================================
     // MARK READ
+    // =============================================
     socket.on('messages:read', async ({ roomId }, callback) => {
       try {
         const senderType = socket.user.role === 'user' ? 'advocate' : 'user';
@@ -215,7 +261,9 @@ const setupSocket = (io) => {
       }
     });
 
+    // =============================================
     // DISCONNECT
+    // =============================================
     socket.on('disconnect', async () => {
       onlineUsers.delete(userKey);
       socketRooms.delete(socket.id);
