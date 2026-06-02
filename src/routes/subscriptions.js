@@ -15,8 +15,35 @@ const _fmt = (v) => {
 };
 
 // =============================================
+// GET /api/subscriptions
+// Ambil semua langganan user yang login
+// =============================================
+router.get('/', authenticate, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await query(`
+      SELECT
+        s.id,
+        s.advocate_id,
+        s.type,
+        s.conversation_id,
+        s.created_at,
+        a.name        AS advocate_name,
+        a.title       AS advocate_role,
+        a.photo_url   AS advocate_photo
+      FROM subscriptions s
+      JOIN advocates a ON a.id = s.advocate_id
+      WHERE s.user_id = $1
+      ORDER BY s.created_at DESC
+    `, [userId]);
+
+    return sendSuccess(res, { subscriptions: result.rows });
+  } catch (error) { next(error); }
+});
+
+// =============================================
 // POST /api/subscriptions/chat
-// User berlangganan chat → notif ke advokat
 // =============================================
 router.post('/chat', authenticate, async (req, res, next) => {
   try {
@@ -29,12 +56,11 @@ router.post('/chat', authenticate, async (req, res, next) => {
         [advocateId]),
     ]);
 
-    const userName   = userRes.rows[0]?.name          ?? 'Pengguna';
-    const fcmToken   = advRes.rows[0]?.fcm_token;
-    const fee        = advRes.rows[0]?.consultation_fee;
-    const feeLabel   = _fmt(fee);
+    const userName = userRes.rows[0]?.name         ?? 'Pengguna';
+    const fcmToken = advRes.rows[0]?.fcm_token;
+    const fee      = advRes.rows[0]?.consultation_fee;
+    const feeLabel = _fmt(fee);
 
-    // Simpan ke database
     await query(
       `INSERT INTO subscriptions
          (user_id, advocate_id, type, conversation_id, created_at)
@@ -45,22 +71,16 @@ router.post('/chat', authenticate, async (req, res, next) => {
       [userId, advocateId, conversationId ?? null]
     );
 
-    // Kirim FCM ke advokat
     if (fcmToken) {
       try {
         await sendToDevice(fcmToken,
           {
             title: '✅ Klien Berlangganan Chat!',
-            body:  `${userName} telah berlangganan konsultasi chat (${feeLabel}). Anda dapat mulai membalas pesan.`,
+            body:  `${userName} telah berlangganan konsultasi chat (${feeLabel}).`,
           },
-          {
-            type:           'new_chat_subscription',
-            userId,
-            userName,
-            conversationId: conversationId ?? '',
-          }
+          { type: 'new_chat_subscription', userId, userName,
+            conversationId: conversationId ?? '' }
         );
-        console.log(`[FCM] Notif langganan chat → advokat ${advocateId}`);
       } catch (fcmErr) {
         console.warn('[FCM] Error chat sub:', fcmErr.message);
       }
@@ -72,7 +92,6 @@ router.post('/chat', authenticate, async (req, res, next) => {
 
 // =============================================
 // POST /api/subscriptions/complaint
-// User buat pengaduan → notif ke advokat
 // =============================================
 router.post('/complaint', authenticate, async (req, res, next) => {
   try {
@@ -90,7 +109,6 @@ router.post('/complaint', authenticate, async (req, res, next) => {
     const fee      = advRes.rows[0]?.complaint_fee;
     const feeLabel = _fmt(fee);
 
-    // Simpan ke database
     await query(
       `INSERT INTO subscriptions (user_id, advocate_id, type, created_at)
        VALUES ($1, $2, 'complaint', NOW())
@@ -99,21 +117,15 @@ router.post('/complaint', authenticate, async (req, res, next) => {
       [userId, advocateId]
     );
 
-    // Kirim FCM ke advokat
     if (fcmToken) {
       try {
         await sendToDevice(fcmToken,
           {
             title: '📋 Pengaduan Baru Masuk!',
-            body:  `${userName} mengajukan pengaduan (${feeLabel}). Segera tinjau di tab Pengaduan.`,
+            body:  `${userName} mengajukan pengaduan (${feeLabel}).`,
           },
-          {
-            type:     'new_complaint',
-            userId,
-            userName,
-          }
+          { type: 'new_complaint', userId, userName }
         );
-        console.log(`[FCM] Notif pengaduan → advokat ${advocateId}`);
       } catch (fcmErr) {
         console.warn('[FCM] Error complaint notif:', fcmErr.message);
       }
